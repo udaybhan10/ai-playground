@@ -1,0 +1,35 @@
+# System related
+.DS_Store
+
+# Frontend related
+node_modules
+.next
+out
+build
+dist
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Backend related
+__pycache__
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+.pytest_cache/
+input_images/
+output_images/
+temp_audio/
+temp_uploads/
+
+# IDE related
+.vscode
+.idea
