@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { Languages, ArrowRight, Loader2, Copy, Check, Sparkles, Globe } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { motion, AnimatePresence } from "framer-motion";
@@ -14,6 +15,26 @@ export function TranslateInterface() {
     const [model, setModel] = useState("llama3.2-vision:latest");
     const [copied, setCopied] = useState(false);
     const [availableModels, setAvailableModels] = useState<string[]>([]);
+    const searchParams = useSearchParams();
+    const sessionId = searchParams.get('session_id');
+
+    useEffect(() => {
+        if (sessionId) {
+            fetch(`http://localhost:8000/api/translate/history/${sessionId}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data) {
+                        setText(data.source_text);
+                        setTargetLang(data.target_lang);
+                        setTranslation(data.translated_text);
+                    }
+                })
+                .catch(err => console.error("Failed to load history:", err));
+        } else {
+            setText("");
+            setTranslation("");
+        }
+    }, [sessionId]);
 
     useEffect(() => {
         // Fetch available models
@@ -189,8 +210,7 @@ export function TranslateInterface() {
                 </div>
 
                 <div className={cn(
-                    "flex-1 bg-gray-900/50 p-6 rounded-2xl rounded-t-none border border-gray-700/50 overflow-y-auto relative transition-colors duration-300",
-                    translation ? "bg-gradient-to-br from-blue-900/20 to-purple-900/20" : ""
+                    "flex-1 bg-gray-900/50 p-6 rounded-2xl rounded-t-none border border-gray-700/50 overflow-y-auto relative transition-colors duration-300"
                 )}>
                     <AnimatePresence mode="wait">
                         {isLoading ? (

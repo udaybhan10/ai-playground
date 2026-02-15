@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Send, User, Bot, Loader2, Sparkles } from "lucide-react";
+import { Send, User, Bot, Loader2, Sparkles, Paperclip, X, FileText } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
@@ -11,17 +11,49 @@ interface Message {
     content: string;
 }
 
+import { useRouter, useSearchParams } from "next/navigation";
+
 interface ChatInterfaceProps {
     initialModel?: string;
 }
 
 export function ChatInterface({ initialModel = "llama3.2" }: ChatInterfaceProps) {
+    const router = useRouter();
+    const searchParams = useSearchParams();
+    const sessionIdParam = searchParams.get("session_id");
+    const sessionId = sessionIdParam ? parseInt(sessionIdParam) : null;
+
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [model, setModel] = useState(initialModel);
     const [availableModels, setAvailableModels] = useState<string[]>([]);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+
+    // RAG state
+    const [uploadedDoc, setUploadedDoc] = useState<{ id: string, name: string } | null>(null);
+    const [isUploading, setIsUploading] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // Fetch history when sessionId changes
+    useEffect(() => {
+        if (sessionId) {
+            fetch(`http://localhost:8000/api/chat/sessions/${sessionId}`)
+                .then(res => {
+                    if (res.ok) return res.json();
+                    throw new Error("Failed to fetch session");
+                })
+                .then(data => {
+                    setMessages(data.messages);
+                })
+                .catch(err => {
+                    console.error(err);
+                    router.push("/chat"); // Redirect if session not found
+                });
+        } else {
+            setMessages([]);
+        }
+    }, [sessionId]);
 
     useEffect(() => {
         // Fetch available models
@@ -47,6 +79,45 @@ export function ChatInterface({ initialModel = "llama3.2" }: ChatInterfaceProps)
         scrollToBottom();
     }, [messages]);
 
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        if (!file.name.endsWith('.pdf') && !file.name.endsWith('.txt') && !file.name.endsWith('.md')) {
+            alert('Only PDF, TXT, and MD files are supported');
+            return;
+        }
+
+        setIsUploading(true);
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('name', file.name);
+
+        try {
+            const res = await fetch('http://localhost:8000/api/rag/upload', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                setUploadedDoc({ id: data.doc_id, name: data.filename });
+                setMessages(prev => [...prev, {
+                    role: 'assistant',
+                    content: `✅ Document "${data.filename}" uploaded successfully! You can now ask questions about it.`
+                }]);
+            } else {
+                throw new Error('Upload failed');
+            }
+        } catch (err) {
+            console.error('Upload error:', err);
+            alert('Failed to upload document');
+        } finally {
+            setIsUploading(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!input.trim() || isLoading) return;
@@ -57,11 +128,38 @@ export function ChatInterface({ initialModel = "llama3.2" }: ChatInterfaceProps)
         setIsLoading(true);
 
         try {
+            // Use RAG endpoint if document is uploaded
+            if (uploadedDoc) {
+                setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+                const response = await fetch("http://localhost:8000/api/rag/chat", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        message: input,
+                        doc_id: uploadedDoc.id,
+                        model: model
+                    })
+                });
+
+                const data = await response.json();
+                setMessages((prev) => {
+                    const updated = [...prev];
+                    updated[updated.length - 1].content = data.message;
+                    return updated;
+                });
+                setIsLoading(false);
+                return;
+            }
+
             // Prepare context from previous messages
             const contextMessages = [...messages, userMessage].map(m => ({
                 role: m.role,
                 content: m.content
             }));
+
+            // Initial empty assistant message
+            setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
             const response = await fetch("http://localhost:8000/api/chat", {
                 method: "POST",
@@ -71,6 +169,7 @@ export function ChatInterface({ initialModel = "llama3.2" }: ChatInterfaceProps)
                 body: JSON.stringify({
                     model: model,
                     messages: contextMessages,
+                    session_id: sessionId
                 }),
             });
 
@@ -78,13 +177,82 @@ export function ChatInterface({ initialModel = "llama3.2" }: ChatInterfaceProps)
                 throw new Error("Failed to get response");
             }
 
-            const data = await response.json();
-            const aiMessage: Message = { role: "assistant", content: data.message.content };
-            setMessages((prev) => [...prev, aiMessage]);
+            if (!response.body) {
+                throw new Error("ReadableStream not yet supported in this browser.");
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let accumulatedContent = "";
+            let isFirstChunk = true;
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value, { stream: true });
+
+                // Check for session_id in the first chunk if we are in a new chat
+                if (isFirstChunk && !sessionId) {
+                    try {
+                        const lines = chunk.split("\n");
+                        // The backend sends {"session_id": ...}\n<content>
+                        if (lines.length > 0 && lines[0].trim().startsWith("{")) {
+                            const parsed = JSON.parse(lines[0]);
+                            if (parsed.session_id) {
+                                router.push(`/chat?session_id=${parsed.session_id}`, { scroll: false });
+
+                                // Reset accumulated content to exclude the JSON line
+                                accumulatedContent = "";
+                                // Add remaining lines (actual content)
+                                const remaining = lines.slice(1).join("\n");
+                                accumulatedContent += remaining;
+                                isFirstChunk = false;
+
+                                setMessages((prev) => {
+                                    const newMessages = [...prev];
+                                    const lastMessage = newMessages[newMessages.length - 1];
+                                    if (lastMessage.role === "assistant") {
+                                        lastMessage.content = accumulatedContent;
+                                    }
+                                    return newMessages;
+                                });
+                                continue;
+                            }
+                        }
+                    } catch (e) {
+                        // ignore
+                    }
+                }
+
+                if (isFirstChunk) {
+                    accumulatedContent += chunk;
+                    isFirstChunk = false;
+                } else {
+                    accumulatedContent += chunk;
+                }
+
+                setMessages((prev) => {
+                    const newMessages = [...prev];
+                    const lastMessage = newMessages[newMessages.length - 1];
+                    if (lastMessage.role === "assistant") {
+                        lastMessage.content = accumulatedContent;
+                    }
+                    return newMessages;
+                });
+            }
         } catch (error) {
             console.error("Chat error:", error);
             const errorMessage: Message = { role: "assistant", content: "Sorry, I encountered an error. Please make sure the backend is running and Ollama is installed." };
-            setMessages((prev) => [...prev, errorMessage]);
+            // Replace the last empty assistant message with error if it exists, or add new
+            setMessages((prev) => {
+                const newMessages = [...prev];
+                if (newMessages.length > 0 && newMessages[newMessages.length - 1].role === "assistant" && newMessages[newMessages.length - 1].content === "") {
+                    newMessages[newMessages.length - 1] = errorMessage;
+                    return newMessages;
+                }
+                return [...prev, errorMessage];
+            });
         } finally {
             setIsLoading(false);
         }
@@ -202,13 +370,51 @@ export function ChatInterface({ initialModel = "llama3.2" }: ChatInterfaceProps)
 
                 {/* Input Area */}
                 <div className="p-4 bg-gray-900/50 backdrop-blur-md border-t border-white/5">
+                    {/* Uploaded Document Indicator */}
+                    {uploadedDoc && (
+                        <div className="mb-3 flex items-center justify-between px-3 py-2 bg-green-500/10 border border-green-500/30 rounded-lg">
+                            <div className="flex items-center space-x-2">
+                                <FileText size={16} className="text-green-400" />
+                                <span className="text-sm text-green-300">{uploadedDoc.name}</span>
+                            </div>
+                            <button
+                                onClick={() => setUploadedDoc(null)}
+                                className="p-1 hover:bg-red-500/20 rounded transition-colors"
+                            >
+                                <X size={14} className="text-red-400" />
+                            </button>
+                        </div>
+                    )}
+
                     <form onSubmit={handleSubmit} className="flex space-x-3 relative">
+                        <button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={isUploading}
+                            className={cn(
+                                "p-3.5 rounded-xl flex items-center justify-center transition-all duration-300 shadow-lg border",
+                                isUploading
+                                    ? "bg-gray-800 text-gray-500 cursor-not-allowed border-gray-700"
+                                    : "bg-gray-800/50 text-gray-300 hover:bg-gray-700/50 border-gray-700 hover:border-primary/50"
+                            )}
+                            title="Upload Document (PDF, TXT, MD)"
+                        >
+                            {isUploading ? <Loader2 size={20} className="animate-spin" /> : <Paperclip size={20} />}
+                        </button>
+                        <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept=".pdf,.txt,.md"
+                            onChange={handleFileUpload}
+                            className="hidden"
+                        />
+
                         <div className="relative flex-1 group">
                             <input
                                 type="text"
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
-                                placeholder="Type your message..."
+                                placeholder={uploadedDoc ? "Ask about the document..." : "Type your message..."}
                                 className="w-full bg-gray-900/50 text-white border border-gray-700/50 rounded-xl px-5 py-3.5 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-transparent transition-all placeholder:text-gray-500 shadow-inner"
                                 disabled={isLoading}
                             />

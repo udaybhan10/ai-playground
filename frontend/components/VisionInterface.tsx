@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { Upload, Image as ImageIcon, Loader2, Send, Sparkles, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { motion, AnimatePresence } from "framer-motion";
@@ -19,6 +20,29 @@ export function VisionInterface({ initialModel = "llama3.2-vision" }: VisionInte
     const [model, setModel] = useState(initialModel);
     const [availableModels, setAvailableModels] = useState<string[]>([]);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const searchParams = useSearchParams();
+    const sessionId = searchParams.get('session_id');
+
+    useEffect(() => {
+        if (sessionId) {
+            fetch(`http://localhost:8000/api/vision/history/${sessionId}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data) {
+                        setPrompt(data.prompt);
+                        setResponse(data.response);
+                        setPreviewUrl(data.image_path.startsWith("http") ? data.image_path : `http://localhost:8000${data.image_path}`);
+                        setSelectedImage(null);
+                    }
+                })
+                .catch(err => console.error("Failed to load history:", err));
+        } else {
+            setPrompt("Describe this image");
+            setResponse("");
+            setPreviewUrl(null);
+            setSelectedImage(null);
+        }
+    }, [sessionId]);
 
     useEffect(() => {
         // Fetch available models

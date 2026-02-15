@@ -29,6 +29,18 @@ input_images/
 output_images/
 temp_audio/
 temp_uploads/
+models/
+*.onnx
+*.bin
+*.pth
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+sql_app.db
+ai_playground.db
+chroma_db/
 
 # IDE related
 .vscode

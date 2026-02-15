@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import { Mic, Play, Download, Loader2, Volume2, Square, Sparkles, Wand2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
@@ -14,6 +15,24 @@ export function TTSInterface() {
     const [isLoading, setIsLoading] = useState(false);
     const [isPlaying, setIsPlaying] = useState(false);
     const audioRef = useRef<HTMLAudioElement | null>(null);
+    const searchParams = useSearchParams();
+    const sessionId = searchParams.get('session_id');
+
+    useEffect(() => {
+        if (sessionId) {
+            fetch(`http://localhost:8000/api/tts/history/${sessionId}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data) {
+                        setText(data.text);
+                        setSelectedVoice(data.voice || "af_sarah");
+                        // Construct full URL for audio
+                        setAudioUrl(data.audio_path.startsWith("http") ? data.audio_path : `http://localhost:8000${data.audio_path}`);
+                    }
+                })
+                .catch(err => console.error("Failed to load history:", err));
+        }
+    }, [sessionId]);
 
     useEffect(() => {
         // Fetch available voices

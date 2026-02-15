@@ -1,10 +1,15 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel
 from fastapi.responses import FileResponse, StreamingResponse
 import os
 import soundfile as sf
 import io
 import numpy as np
+from sqlalchemy.orm import Session
+from database import get_db
+from models import TTSHistory
+import uuid
+import shutil
 
 # Try importing Kokoro, but handle potential missing dependencies or model files
 try:
@@ -37,7 +42,7 @@ class TTSRequest(BaseModel):
     speed: float = 1.0
 
 @router.post("/tts")
-async def generate_speech(request: TTSRequest):
+async def generate_speech(request: TTSRequest, db: Session = Depends(get_db)):
     if not KOKORO_AVAILABLE:
          raise HTTPException(status_code=500, detail="Kokoro-onnx library not installed.")
     
@@ -45,10 +50,6 @@ async def generate_speech(request: TTSRequest):
         kokoro = get_kokoro()
         
         # Generate audio
-        # samples, sample_rate = kokoro.create(request.text, voice=request.voice, speed=request.speed, lang="en-us")
-        # create returns (samples, sample_rate)
-        # Verify method signature from kokoro-onnx docs or usage
-        
         samples, sample_rate = kokoro.create(
             request.text, 
             voice=request.voice, 
@@ -56,7 +57,22 @@ async def generate_speech(request: TTSRequest):
             lang="en-us"
         )
         
-        # Convert to BytesIO
+        # Save to file
+        filename = f"{uuid.uuid4()}.wav"
+        filepath = os.path.join("static", filename)
+        sf.write(filepath, samples, sample_rate, format='WAV')
+
+        # Save to DB
+        history_item = TTSHistory(
+            text=request.text,
+            voice=request.voice,
+            audio_path=f"/static/{filename}"
+        )
+        db.add(history_item)
+        db.commit()
+        
+        # Return streaming response (reading from file or memory)
+        # We can enable the user to play it immediately
         buffer = io.BytesIO()
         sf.write(buffer, samples, sample_rate, format='WAV')
         buffer.seek(0)
@@ -67,6 +83,27 @@ async def generate_speech(request: TTSRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/tts/history")
+async def list_tts_history(db: Session = Depends(get_db)):
+    history = db.query(TTSHistory).order_by(TTSHistory.created_at.desc()).all()
+    return history
+
+@router.get("/tts/history/{history_id}")
+async def get_tts_history_item(history_id: int, db: Session = Depends(get_db)):
+    item = db.query(TTSHistory).filter(TTSHistory.id == history_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="History item not found")
+    return item
+
+@router.delete("/tts/history/{history_id}")
+async def delete_tts_history(history_id: int, db: Session = Depends(get_db)):
+    item = db.query(TTSHistory).filter(TTSHistory.id == history_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="History item not found")
+    db.delete(item)
+    db.commit()
+    return {"status": "success"}
 
 @router.get("/tts/voices")
 async def list_voices():

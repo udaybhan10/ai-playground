@@ -1,6 +1,10 @@
-import type { Metadata } from "next";
+"use client";
+
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { Sidebar } from "@/components/ui/Sidebar";
+import { VoiceModeOverlay } from "@/components/VoiceModeOverlay";
+import { useState, useEffect } from "react";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -12,20 +16,30 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-export const metadata: Metadata = {
-  title: "AI Playground",
-  description: "Local AI Playground inspired by Sarvam AI",
-};
-
-import { Sidebar } from "@/components/ui/Sidebar";
-
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const [voiceModeOpen, setVoiceModeOpen] = useState(false);
+  const [voiceSessionId, setVoiceSessionId] = useState<number | null>(null);
+
+  useEffect(() => {
+    const handleToggle = (event: any) => {
+      const sessionId = event.detail?.sessionId || null;
+      setVoiceSessionId(sessionId);
+      setVoiceModeOpen(prev => !prev);
+    };
+    window.addEventListener('toggleVoiceMode', handleToggle);
+    return () => window.removeEventListener('toggleVoiceMode', handleToggle);
+  }, []);
+
   return (
     <html lang="en">
+      <head>
+        <title>AI Playground</title>
+        <meta name="description" content="Local AI Playground inspired by Sarvam AI" />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased flex h-screen bg-gray-950 text-gray-100`}
       >
@@ -35,6 +49,11 @@ export default function RootLayout({
             {children}
           </div>
         </main>
+        <VoiceModeOverlay
+          isOpen={voiceModeOpen}
+          onClose={() => setVoiceModeOpen(false)}
+          initialSessionId={voiceSessionId}
+        />
       </body>
     </html>
   );

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { Mic, Square, Upload, FileAudio, Loader2, Copy, Check, Waves, Sparkles } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
@@ -8,6 +9,7 @@ import { cn } from "@/lib/utils";
 export function STTInterface() {
     const [isRecording, setIsRecording] = useState(false);
     const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+    const [audioUrl, setAudioUrl] = useState<string | null>(null); // Added for playback
     const [transcription, setTranscription] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [metadata, setMetadata] = useState<{ language?: string, probability?: number } | null>(null);
@@ -16,6 +18,31 @@ export function STTInterface() {
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const chunksRef = useRef<Blob[]>([]);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const searchParams = useSearchParams();
+    const sessionId = searchParams.get('session_id');
+
+    useEffect(() => {
+        if (sessionId) {
+            fetch(`http://localhost:8000/api/stt/history/${sessionId}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data) {
+                        setTranscription(data.transcript);
+                        setMetadata({
+                            language: data.language,
+                            probability: data.language_probability
+                        });
+                        setAudioUrl(data.audio_path.startsWith("http") ? data.audio_path : `http://localhost:8000${data.audio_path}`);
+                        setAudioBlob(null);
+                    }
+                })
+                .catch(err => console.error("Failed to load history:", err));
+        } else {
+            setTranscription("");
+            setAudioUrl(null);
+            setMetadata(null);
+        }
+    }, [sessionId]);
 
     const startRecording = async () => {
         try {
@@ -219,6 +246,26 @@ export function STTInterface() {
                         </motion.div>
                     )}
                 </AnimatePresence>
+
+
+                {/* Audio Player for History */}
+                <AnimatePresence>
+                    {audioUrl && !isRecording && (
+                        <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="glass-card p-5"
+                        >
+                            <div className="flex items-center space-x-3 mb-3">
+                                <div className="p-2 bg-orange-500/20 rounded-lg">
+                                    <FileAudio size={16} className="text-orange-400" />
+                                </div>
+                                <span className="text-sm font-medium text-gray-300">Original Recording</span>
+                            </div>
+                            <audio src={audioUrl} controls className="w-full h-8 opacity-80 hover:opacity-100 transition-opacity" />
+                        </motion.div>
+                    )}
+                </AnimatePresence>
             </div>
 
             {/* Right Column: Transcription Output */}
@@ -280,6 +327,6 @@ export function STTInterface() {
                     </AnimatePresence>
                 </div>
             </div>
-        </div>
+        </div >
     );
 }
